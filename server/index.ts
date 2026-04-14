@@ -1,4 +1,7 @@
 import { randomBytes } from "crypto";
+import { existsSync } from "fs";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
 import cookieSession from "cookie-session";
 import cors from "cors";
 import express from "express";
@@ -10,8 +13,20 @@ import {
 } from "./auth.js";
 import { prisma } from "./db.js";
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
 const app = express();
-const PORT = Number(process.env.API_PORT) || 3001;
+app.set("trust proxy", 1);
+
+function envPort(name: string): number | undefined {
+  const v = process.env[name];
+  if (v == null || v === "") return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+/** Railway sets PORT; local dev often uses API_PORT or 3001. */
+const PORT = envPort("PORT") ?? envPort("API_PORT") ?? 3001;
 const SESSION_SECRET =
   process.env.SESSION_SECRET || "dev-only-change-me-in-production";
 
@@ -792,6 +807,15 @@ app.post("/api/expenses/track", requireAuth, async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`API listening on http://127.0.0.1:${PORT}`);
+const distDir = join(__dirname, "..", "dist");
+if (existsSync(join(distDir, "index.html"))) {
+  app.use(express.static(distDir));
+  app.get("*", (req, res, next) => {
+    if (req.path.startsWith("/api")) return next();
+    res.sendFile(join(distDir, "index.html"));
+  });
+}
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server listening on http://0.0.0.0:${PORT}`);
 });
