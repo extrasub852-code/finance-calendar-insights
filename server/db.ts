@@ -44,6 +44,24 @@ async function ensureTursoSchema(): Promise<void> {
     /* ignore */
   }
 
+  // Same (userId, eventId, occurrenceKey) twice breaks the Prisma unique index; keep oldest row.
+  try {
+    await client.execute(
+      `DELETE FROM "TrackedExpense" AS t1
+       WHERE t1."eventId" IS NOT NULL
+         AND EXISTS (
+           SELECT 1 FROM "TrackedExpense" AS t2
+           WHERE t2."userId" = t1."userId"
+             AND t2."eventId" = t1."eventId"
+             AND COALESCE(t2."occurrenceKey", '') = COALESCE(t1."occurrenceKey", '')
+             AND t2."id" < t1."id"
+         );`,
+    );
+  } catch (e) {
+    console.error("[fci] TrackedExpense dedupe failed:", e);
+    throw e;
+  }
+
   await safeExecute(
     `CREATE UNIQUE INDEX IF NOT EXISTS "TrackedExpense_userId_eventId_occurrenceKey_key" ON "TrackedExpense" ("userId", "eventId", "occurrenceKey");`,
   );

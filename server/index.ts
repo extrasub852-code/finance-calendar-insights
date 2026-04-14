@@ -5,6 +5,7 @@ import { fileURLToPath } from "url";
 import cookieSession from "cookie-session";
 import cors from "cors";
 import express from "express";
+import { Prisma } from "@prisma/client";
 import {
   hashPassword,
   normalizeEmail,
@@ -931,6 +932,13 @@ app.post("/api/expenses/track", requireAuth, async (req, res) => {
       spentByCategory,
     });
   } catch (e) {
+    if (
+      e instanceof Prisma.PrismaClientKnownRequestError &&
+      e.code === "P2002"
+    ) {
+      res.status(400).json({ error: "already_tracked" });
+      return;
+    }
     console.error(e);
     res.status(500).json({ error: "track_failed" });
   }
