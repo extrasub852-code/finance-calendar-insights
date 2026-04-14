@@ -1,6 +1,6 @@
 import { PrismaLibSQL } from "@prisma/adapter-libsql";
 import { PrismaClient } from "@prisma/client";
-import { ensureTursoSchema } from "./ensureTursoSchema.js";
+import { ensureTursoSchema } from "./ensureTursoSchema";
 
 await ensureTursoSchema();
 
