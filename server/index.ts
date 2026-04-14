@@ -18,6 +18,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 app.set("trust proxy", 1);
 
+/** Plain route for Railway / load balancer probes (no cookies, no DB). */
+app.get("/health", (_req, res) => {
+  res.status(200).type("text/plain").send("ok");
+});
+
 function envPort(name: string): number | undefined {
   const v = process.env[name];
   if (v == null || v === "") return undefined;
@@ -817,5 +822,7 @@ if (existsSync(join(distDir, "index.html"))) {
 }
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server listening on http://0.0.0.0:${PORT}`);
+  console.log(
+    `[fci] listening on 0.0.0.0:${PORT} node=${process.version} turso=${Boolean(process.env.TURSO_DATABASE_URL)}`,
+  );
 });

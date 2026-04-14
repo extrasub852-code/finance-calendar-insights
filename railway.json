@@ -5,6 +5,8 @@
     "dockerfilePath": "Dockerfile"
   },
   "deploy": {
-    "startCommand": "npm start"
+    "startCommand": "node --import tsx server/index.ts",
+    "healthcheckPath": "/health",
+    "healthcheckTimeout": 60
   }
 }
