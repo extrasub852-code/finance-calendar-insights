@@ -1,5 +1,8 @@
 import { PrismaLibSQL } from "@prisma/adapter-libsql";
 import { PrismaClient } from "@prisma/client";
+import { ensureTursoSchema } from "./ensureTursoSchema.js";
+
+await ensureTursoSchema();
 
 function createPrisma(): PrismaClient {
   const tursoUrl = process.env.TURSO_DATABASE_URL?.trim();
