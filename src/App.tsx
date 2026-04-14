@@ -10,7 +10,12 @@ import { BudgetOnboardingModal } from "./components/BudgetOnboardingModal";
 import { BudgetGoalsModal } from "./components/BudgetGoalsModal";
 import { MonthBudgetPromptModal } from "./components/MonthBudgetPromptModal";
 import { AuthScreen } from "./components/AuthScreen";
-import type { CalendarEvent, UserCategoryDto } from "./types";
+import type {
+  CalendarEvent,
+  ExpenseKindTag,
+  RecurrenceRule,
+  UserCategoryDto,
+} from "./types";
 import {
   createEventApi,
   deleteEventApi,
@@ -30,6 +35,14 @@ function parseLocalDateTime(dateStr: string, timeStr: string): Date {
   const [y, mo, d] = dateStr.split("-").map(Number);
   const [h, mi] = timeStr.split(":").map(Number);
   return new Date(y, mo - 1, d, h, mi ?? 0, 0, 0);
+}
+
+function recurrenceEndToIso(dateStr: string): string | undefined {
+  const t = dateStr.trim();
+  if (!t) return undefined;
+  const [y, mo, d] = t.split("-").map(Number);
+  if (!y || !mo || !d) return undefined;
+  return new Date(y, mo - 1, d, 23, 59, 59, 999).toISOString();
 }
 
 export default function App() {
@@ -262,6 +275,9 @@ export default function App() {
       endTime: string;
       category: string;
       costOverride: string;
+      recurrence: RecurrenceRule | "none";
+      recurrenceEnd: string;
+      expenseKind: ExpenseKindTag | "";
     }) => {
       const start = parseLocalDateTime(payload.dateStr, payload.startTime);
       const end = parseLocalDateTime(payload.dateStr, payload.endTime);
@@ -278,13 +294,22 @@ export default function App() {
         category: payload.category,
       };
       if (Number.isFinite(cost)) body.estimatedCostUsd = cost;
+      if (payload.recurrence !== "none") {
+        body.recurrence = payload.recurrence;
+        const reIso = recurrenceEndToIso(payload.recurrenceEnd);
+        if (reIso) body.recurrenceEnd = reIso;
+      }
+      if (payload.expenseKind) body.expenseKind = payload.expenseKind;
       const created = await createEventApi(body);
-      const ev = mapApiEventToCalendar(created);
-      setEvents((prev) => [...prev, ev]);
-      setSelectedId(ev.id);
+      await refresh();
+      const recurring = Boolean(created.recurrence);
+      const sel = recurring
+        ? `${created.id}#${new Date(created.start).getTime()}`
+        : created.id;
+      setSelectedId(sel);
       setWeekAnchor(startOfWeek(start, { weekStartsOn: 0 }));
     },
-    [],
+    [refresh],
   );
 
   const handleEditEventSave = useCallback(
@@ -296,6 +321,9 @@ export default function App() {
       endTime: string;
       category: string;
       costOverride: string;
+      recurrence: RecurrenceRule | "none";
+      recurrenceEnd: string;
+      expenseKind: ExpenseKindTag | "";
     }) => {
       const start = parseLocalDateTime(payload.dateStr, payload.startTime);
       const end = parseLocalDateTime(payload.dateStr, payload.endTime);
@@ -311,24 +339,29 @@ export default function App() {
         end: end.toISOString(),
         category: payload.category,
         estimatedCostUsd: Number.isFinite(cost) ? cost : null,
+        recurrence: payload.recurrence === "none" ? null : payload.recurrence,
+        recurrenceEnd:
+          payload.recurrenceEnd.trim() === ""
+            ? null
+            : (recurrenceEndToIso(payload.recurrenceEnd) ?? null),
+        expenseKind: payload.expenseKind || null,
       };
-      const updated = await patchEventApi(payload.id, body);
-      setEvents((prev) =>
-        prev.map((e) =>
-          e.id === payload.id ? mapApiEventToCalendar(updated) : e,
-        ),
-      );
+      await patchEventApi(payload.id, body);
+      await refresh();
       setWeekAnchor(startOfWeek(start, { weekStartsOn: 0 }));
     },
-    [],
+    [refresh],
   );
 
-  const handleEditEventDelete = useCallback(async (id: string) => {
-    await deleteEventApi(id);
-    setEvents((prev) => prev.filter((e) => e.id !== id));
-    setSelectedId((s) => (s === id ? null : s));
-    setEditModalEventId((e) => (e === id ? null : e));
-  }, []);
+  const handleEditEventDelete = useCallback(
+    async (id: string) => {
+      await deleteEventApi(id);
+      await refresh();
+      setSelectedId(null);
+      setEditModalEventId(null);
+    },
+    [refresh],
+  );
 
   const dismissMonthPrompt = () => {
     if (monthPromptYm && sessionUser?.id) {
@@ -477,12 +510,8 @@ export default function App() {
           await refresh();
         }}
         onEditCost={async (id, amountUsd) => {
-          const updated = await patchEventApi(id, { estimatedCostUsd: amountUsd });
-          setEvents((prev) =>
-            prev.map((e) =>
-              e.id === id ? mapApiEventToCalendar(updated) : e,
-            ),
-          );
+          await patchEventApi(id, { estimatedCostUsd: amountUsd });
+          await refresh();
         }}
         onIgnore={() => setSelectedId(null)}
         onOpenBudgetModal={() => openBudgetModal()}

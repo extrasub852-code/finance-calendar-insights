@@ -1,4 +1,4 @@
-import type { CalendarEvent, UserCategoryDto } from "./types";
+import type { CalendarEvent, ExpenseKindTag, RecurrenceRule, UserCategoryDto } from "./types";
 
 const API = "";
 
@@ -82,6 +82,10 @@ export type BootstrapResponse = {
     end: string;
     category: string;
     estimatedCostUsd: number | null;
+    seriesId: string;
+    recurrence: string | null;
+    recurrenceEnd: string | null;
+    expenseKind: string | null;
   }[];
 };
 
@@ -162,6 +166,9 @@ export async function createEventApi(payload: {
   end: string;
   category: string;
   estimatedCostUsd?: number | null;
+  recurrence?: string | null;
+  recurrenceEnd?: string | null;
+  expenseKind?: string | null;
 }): Promise<{
   id: string;
   title: string;
@@ -169,6 +176,10 @@ export async function createEventApi(payload: {
   end: string;
   category: string;
   estimatedCostUsd: number | null;
+  seriesId: string;
+  recurrence: string | null;
+  recurrenceEnd: string | null;
+  expenseKind: string | null;
 }> {
   const r = await apiFetch(`${API}/api/events`, {
     method: "POST",
@@ -187,6 +198,9 @@ export async function patchEventApi(
     end?: string;
     category?: string;
     estimatedCostUsd?: number | null;
+    recurrence?: string | null;
+    recurrenceEnd?: string | null;
+    expenseKind?: string | null;
   },
 ): Promise<{
   id: string;
@@ -195,8 +209,12 @@ export async function patchEventApi(
   end: string;
   category: string;
   estimatedCostUsd: number | null;
+  seriesId: string;
+  recurrence: string | null;
+  recurrenceEnd: string | null;
+  expenseKind: string | null;
 }> {
-  const r = await apiFetch(`${API}/api/events/${id}`, {
+  const r = await apiFetch(`${API}/api/events/${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -206,7 +224,9 @@ export async function patchEventApi(
 }
 
 export async function deleteEventApi(id: string): Promise<void> {
-  const r = await apiFetch(`${API}/api/events/${id}`, { method: "DELETE" });
+  const r = await apiFetch(`${API}/api/events/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
   if (!r.ok) throw new Error("delete_event_failed");
 }
 
@@ -274,5 +294,9 @@ export function mapApiEventToCalendar(
     end: new Date(e.end),
     category: e.category || "other",
     estimatedCostUsd: e.estimatedCostUsd ?? undefined,
+    seriesId: e.seriesId ?? e.id,
+    recurrence: (e.recurrence as RecurrenceRule | null) ?? null,
+    recurrenceEnd: e.recurrenceEnd ? new Date(e.recurrenceEnd) : undefined,
+    expenseKind: (e.expenseKind as ExpenseKindTag | null) ?? null,
   };
 }

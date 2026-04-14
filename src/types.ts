@@ -8,6 +8,10 @@ export interface UserCategoryDto {
   isBuiltIn: boolean;
 }
 
+export type RecurrenceRule = "daily" | "weekly" | "monthly" | "yearly";
+
+export type ExpenseKindTag = "rent" | "utilities" | "subscription";
+
 export interface CalendarEvent {
   id: string;
   title: string;
@@ -15,6 +19,11 @@ export interface CalendarEvent {
   end: Date;
   category: CategorySlug;
   estimatedCostUsd?: number;
+  /** Stored series id (same as id for one-off events). */
+  seriesId?: string;
+  recurrence?: RecurrenceRule | null;
+  recurrenceEnd?: Date;
+  expenseKind?: ExpenseKindTag | null;
 }
 
 /** Built-in slugs used in onboarding ordering */

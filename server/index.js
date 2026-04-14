@@ -7,6 +7,9 @@ import cors from "cors";
 import express from "express";
 import { hashPassword, normalizeEmail, requireAuth, verifyPassword, } from "./auth.js";
 import { prisma } from "./db.js";
+import { expandStoredEventsForWindow, expansionWindowForYearMonth } from "./eventExpansion.js";
+import { composeCalendarEventId, parseCalendarEventId } from "./eventIds.js";
+import { normalizeRecurrence } from "./recurrence.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 app.set("trust proxy", 1);
@@ -36,6 +39,9 @@ export const BUILT_IN = [
     { slug: "travel", name: "Travel", colorIndex: 2 },
     { slug: "health", name: "Health", colorIndex: 3 },
     { slug: "other", name: "Other", colorIndex: 4 },
+    { slug: "rent", name: "Rent / housing", colorIndex: 5 },
+    { slug: "utilities", name: "Utilities", colorIndex: 6 },
+    { slug: "subscriptions", name: "Subscriptions", colorIndex: 7 },
 ];
 app.use(cors({
     origin: true,
@@ -242,10 +248,12 @@ app.get("/api/bootstrap", requireAuth, async (req, res) => {
         for (const b of defaultRows) {
             defaultCategoryBudgets[b.category] = b.monthlyAmountUsd;
         }
-        const events = await prisma.event.findMany({
+        const eventRows = await prisma.event.findMany({
             where: { userId: user.id },
             orderBy: { startAt: "asc" },
         });
+        const { windowStart, windowEnd } = expansionWindowForYearMonth(ym);
+        const events = expandStoredEventsForWindow(eventRows, windowStart, windowEnd);
         const { start, end } = monthBoundsFromYearMonth(ym);
         const expenses = await prisma.trackedExpense.findMany({
             where: {
@@ -260,12 +268,23 @@ app.get("/api/bootstrap", requireAuth, async (req, res) => {
         }
         const trackedExpenseRows = await prisma.trackedExpense.findMany({
             where: { userId: user.id, eventId: { not: null } },
-            select: { eventId: true },
+            select: { eventId: true, occurrenceKey: true },
         });
         const trackedEventIds = [
             ...new Set(trackedExpenseRows
-                .map((r) => r.eventId)
-                .filter((id) => id != null && id.length > 0)),
+                .map((r) => {
+                const eid = r.eventId;
+                if (!eid)
+                    return "";
+                if (r.occurrenceKey && r.occurrenceKey.length > 0) {
+                    const ms = Number(r.occurrenceKey);
+                    if (Number.isFinite(ms)) {
+                        return composeCalendarEventId(eid, ms);
+                    }
+                }
+                return eid;
+            })
+                .filter((id) => id.length > 0)),
         ];
         res.json({
             user: {
@@ -286,14 +305,7 @@ app.get("/api/bootstrap", requireAuth, async (req, res) => {
             defaultCategoryBudgets,
             spentByCategory,
             trackedEventIds,
-            events: events.map((e) => ({
-                id: e.id,
-                title: e.title,
-                start: e.startAt.toISOString(),
-                end: e.endAt.toISOString(),
-                category: e.category,
-                estimatedCostUsd: e.estimatedCostUsd,
-            })),
+            events,
         });
     }
     catch (e) {
@@ -513,7 +525,7 @@ app.delete("/api/categories/:slug", requireAuth, async (req, res) => {
 app.post("/api/events", requireAuth, async (req, res) => {
     try {
         const user = req.user;
-        const { title, start, end, category, estimatedCostUsd } = req.body;
+        const { title, start, end, category, estimatedCostUsd, recurrence, recurrenceEnd, expenseKind, } = req.body;
         if (!title || !start || !end || !category) {
             res.status(400).json({ error: "missing_fields" });
             return;
@@ -531,6 +543,16 @@ app.post("/api/events", requireAuth, async (req, res) => {
             res.status(400).json({ error: "invalid_dates" });
             return;
         }
+        const rule = normalizeRecurrence(recurrence);
+        let recurrenceEndAt = null;
+        if (typeof recurrenceEnd === "string" && recurrenceEnd.trim()) {
+            const d = new Date(recurrenceEnd);
+            recurrenceEndAt = Number.isNaN(d.getTime()) ? null : d;
+        }
+        const allowedKinds = new Set(["rent", "utilities", "subscription"]);
+        const kind = typeof expenseKind === "string" && allowedKinds.has(expenseKind)
+            ? expenseKind
+            : null;
         const ev = await prisma.event.create({
             data: {
                 userId: user.id,
@@ -541,6 +563,9 @@ app.post("/api/events", requireAuth, async (req, res) => {
                 estimatedCostUsd: estimatedCostUsd != null && Number.isFinite(estimatedCostUsd)
                     ? estimatedCostUsd
                     : null,
+                recurrence: rule,
+                recurrenceEnd: recurrenceEndAt,
+                expenseKind: kind,
             },
         });
         res.status(201).json({
@@ -550,6 +575,10 @@ app.post("/api/events", requireAuth, async (req, res) => {
             end: ev.endAt.toISOString(),
             category: ev.category,
             estimatedCostUsd: ev.estimatedCostUsd,
+            seriesId: ev.id,
+            recurrence: ev.recurrence,
+            recurrenceEnd: ev.recurrenceEnd?.toISOString() ?? null,
+            expenseKind: ev.expenseKind,
         });
     }
     catch (e) {
@@ -560,10 +589,11 @@ app.post("/api/events", requireAuth, async (req, res) => {
 app.patch("/api/events/:id", requireAuth, async (req, res) => {
     try {
         const user = req.user;
-        const id = routeParam(req.params.id);
-        const { title, start, end, category, estimatedCostUsd } = req.body;
+        const routeId = routeParam(req.params.id);
+        const { seriesId, instanceStartMs } = parseCalendarEventId(routeId);
+        const { title, start, end, category, estimatedCostUsd, recurrence, recurrenceEnd, expenseKind, } = req.body;
         const existing = await prisma.event.findFirst({
-            where: { id, userId: user.id },
+            where: { id: seriesId, userId: user.id },
         });
         if (!existing) {
             res.status(404).json({ error: "not_found" });
@@ -578,12 +608,57 @@ app.patch("/api/events/:id", requireAuth, async (req, res) => {
                 return;
             }
         }
+        const hasRecurrence = normalizeRecurrence(existing.recurrence) != null;
+        let nextStartAt = existing.startAt;
+        let nextEndAt = existing.endAt;
+        if (start != null && end != null) {
+            const newStart = new Date(start);
+            const newEnd = new Date(end);
+            if (Number.isNaN(newStart.getTime()) || Number.isNaN(newEnd.getTime())) {
+                res.status(400).json({ error: "invalid_dates" });
+                return;
+            }
+            if (hasRecurrence && instanceStartMs != null) {
+                const deltaMs = newStart.getTime() - instanceStartMs;
+                nextStartAt = new Date(existing.startAt.getTime() + deltaMs);
+                nextEndAt = new Date(nextStartAt.getTime() + (newEnd.getTime() - newStart.getTime()));
+            }
+            else {
+                nextStartAt = newStart;
+                nextEndAt = newEnd;
+            }
+        }
+        let nextRecurrence = existing.recurrence;
+        if (recurrence !== undefined) {
+            nextRecurrence = normalizeRecurrence(recurrence);
+        }
+        let nextRecurrenceEnd = existing.recurrenceEnd;
+        if (recurrenceEnd !== undefined) {
+            if (recurrenceEnd == null || recurrenceEnd === "") {
+                nextRecurrenceEnd = null;
+            }
+            else {
+                const d = new Date(recurrenceEnd);
+                nextRecurrenceEnd = Number.isNaN(d.getTime()) ? null : d;
+            }
+        }
+        const allowedKinds = new Set(["rent", "utilities", "subscription"]);
+        let nextExpenseKind = existing.expenseKind;
+        if (expenseKind !== undefined) {
+            nextExpenseKind =
+                expenseKind != null &&
+                    typeof expenseKind === "string" &&
+                    allowedKinds.has(expenseKind)
+                    ? expenseKind
+                    : null;
+        }
         const ev = await prisma.event.update({
-            where: { id },
+            where: { id: seriesId },
             data: {
                 ...(title != null ? { title } : {}),
-                ...(start != null ? { startAt: new Date(start) } : {}),
-                ...(end != null ? { endAt: new Date(end) } : {}),
+                ...(start != null && end != null
+                    ? { startAt: nextStartAt, endAt: nextEndAt }
+                    : {}),
                 ...(category != null ? { category } : {}),
                 ...(estimatedCostUsd !== undefined
                     ? {
@@ -592,6 +667,9 @@ app.patch("/api/events/:id", requireAuth, async (req, res) => {
                             : null,
                     }
                     : {}),
+                recurrence: nextRecurrence,
+                recurrenceEnd: nextRecurrenceEnd,
+                expenseKind: nextExpenseKind,
             },
         });
         res.json({
@@ -601,6 +679,10 @@ app.patch("/api/events/:id", requireAuth, async (req, res) => {
             end: ev.endAt.toISOString(),
             category: ev.category,
             estimatedCostUsd: ev.estimatedCostUsd,
+            seriesId: ev.id,
+            recurrence: ev.recurrence,
+            recurrenceEnd: ev.recurrenceEnd?.toISOString() ?? null,
+            expenseKind: ev.expenseKind,
         });
     }
     catch (e) {
@@ -611,15 +693,16 @@ app.patch("/api/events/:id", requireAuth, async (req, res) => {
 app.delete("/api/events/:id", requireAuth, async (req, res) => {
     try {
         const user = req.user;
-        const id = routeParam(req.params.id);
+        const routeId = routeParam(req.params.id);
+        const { seriesId } = parseCalendarEventId(routeId);
         const existing = await prisma.event.findFirst({
-            where: { id, userId: user.id },
+            where: { id: seriesId, userId: user.id },
         });
         if (!existing) {
             res.status(404).json({ error: "not_found" });
             return;
         }
-        await prisma.event.delete({ where: { id } });
+        await prisma.event.delete({ where: { id: seriesId } });
         res.json({ ok: true });
     }
     catch (e) {
@@ -649,9 +732,11 @@ app.patch("/api/user", requireAuth, async (req, res) => {
 app.delete("/api/expenses/for-event/:eventId", requireAuth, async (req, res) => {
     try {
         const user = req.user;
-        const eventId = routeParam(req.params.eventId);
+        const routeId = routeParam(req.params.eventId);
+        const { seriesId, instanceStartMs } = parseCalendarEventId(routeId);
+        const occurrenceKey = instanceStartMs != null ? String(instanceStartMs) : "";
         const rows = await prisma.trackedExpense.findMany({
-            where: { userId: user.id, eventId },
+            where: { userId: user.id, eventId: seriesId, occurrenceKey },
         });
         if (rows.length === 0) {
             res.status(404).json({ error: "not_found" });
@@ -660,7 +745,7 @@ app.delete("/api/expenses/for-event/:eventId", requireAuth, async (req, res) => 
         const refund = rows.reduce((s, r) => s + r.amountUsd, 0);
         await prisma.$transaction(async (tx) => {
             await tx.trackedExpense.deleteMany({
-                where: { userId: user.id, eventId },
+                where: { userId: user.id, eventId: seriesId, occurrenceKey },
             });
             await tx.user.update({
                 where: { id: user.id },
@@ -687,8 +772,10 @@ app.post("/api/expenses/track", requireAuth, async (req, res) => {
             return;
         }
         if (eventId) {
+            const { seriesId, instanceStartMs } = parseCalendarEventId(eventId);
+            const occurrenceKey = instanceStartMs != null ? String(instanceStartMs) : "";
             const dup = await prisma.trackedExpense.findFirst({
-                where: { userId: user.id, eventId },
+                where: { userId: user.id, eventId: seriesId, occurrenceKey },
             });
             if (dup) {
                 res.status(400).json({ error: "already_tracked" });
@@ -698,11 +785,16 @@ app.post("/api/expenses/track", requireAuth, async (req, res) => {
         const ym = typeof yearMonth === "string" && /^\d{4}-\d{2}$/.test(yearMonth)
             ? yearMonth
             : `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+        const { seriesId, instanceStartMs } = eventId
+            ? parseCalendarEventId(eventId)
+            : { seriesId: "", instanceStartMs: null };
+        const occurrenceKey = eventId && instanceStartMs != null ? String(instanceStartMs) : "";
         await prisma.$transaction(async (tx) => {
             await tx.trackedExpense.create({
                 data: {
                     userId: user.id,
-                    eventId: eventId ?? null,
+                    eventId: eventId ? seriesId : null,
+                    occurrenceKey: eventId ? occurrenceKey : "",
                     amountUsd,
                     category,
                 },
@@ -744,6 +836,9 @@ if (existsSync(join(distDir, "index.html"))) {
         res.sendFile(join(distDir, "index.html"));
     });
 }
-app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[fci] listening on 0.0.0.0:${PORT} node=${process.version} turso=${Boolean(process.env.TURSO_DATABASE_URL)}`);
-});
+if (!process.env.VITEST) {
+    app.listen(PORT, "0.0.0.0", () => {
+        console.log(`[fci] listening on 0.0.0.0:${PORT} node=${process.version} turso=${Boolean(process.env.TURSO_DATABASE_URL)}`);
+    });
+}
+export { app };

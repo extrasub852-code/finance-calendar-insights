@@ -165,7 +165,10 @@ export function WeekCalendar({
                       style={{ top, height }}
                       title={`${e.title} — double-click to edit`}
                     >
-                      <span className="font-medium">{e.title}</span>
+                      <span className="font-medium">
+                        {e.recurrence ? "↻ " : ""}
+                        {e.title}
+                      </span>
                       <span className="block text-[10px] opacity-90">
                         {format(e.start, "h:mm a")} – {format(e.end, "h:mm a")}
                       </span>

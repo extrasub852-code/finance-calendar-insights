@@ -8,4 +8,6 @@ dist
 !.env.example
 prisma/dev.db
 prisma/dev.db-journal
+prisma/vitest.db
+prisma/vitest.db-journal
 .npm-cache

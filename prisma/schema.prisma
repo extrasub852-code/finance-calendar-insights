@@ -57,23 +57,32 @@ model MonthCategoryBudget {
 }
 
 model Event {
-  id               String   @id @default(cuid())
+  id               String    @id @default(cuid())
   userId           String
-  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   title            String
   startAt          DateTime
   endAt            DateTime
   category         String
   estimatedCostUsd Float?
-  createdAt        DateTime @default(now())
+  /** null = one-off; otherwise repeat rule from anchor startAt */
+  recurrence       String?
+  recurrenceEnd    DateTime?
+  /** Optional tag: rent | utilities | subscription */
+  expenseKind      String?
+  createdAt        DateTime  @default(now())
 }
 
 model TrackedExpense {
-  id         String   @id @default(cuid())
-  userId     String
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  eventId    String?
-  amountUsd  Float
-  category   String
-  createdAt  DateTime @default(now())
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  eventId       String?
+  /** Empty for one-off events; occurrence start epoch ms string for recurring instances */
+  occurrenceKey String   @default("")
+  amountUsd     Float
+  category      String
+  createdAt     DateTime @default(now())
+
+  @@unique([userId, eventId, occurrenceKey])
 }

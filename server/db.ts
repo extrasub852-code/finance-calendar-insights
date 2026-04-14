@@ -2,8 +2,8 @@ import { PrismaLibSQL } from "@prisma/adapter-libsql";
 import { PrismaClient } from "@prisma/client";
 
 function createPrisma(): PrismaClient {
-  const tursoUrl = process.env.TURSO_DATABASE_URL;
-  const tursoToken = process.env.TURSO_AUTH_TOKEN;
+  const tursoUrl = process.env.TURSO_DATABASE_URL?.trim();
+  const tursoToken = process.env.TURSO_AUTH_TOKEN?.trim();
 
   if (tursoUrl && tursoToken) {
     // Prisma schema still requires DATABASE_URL; the libSQL adapter handles the real connection.

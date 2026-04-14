@@ -9,6 +9,9 @@ const BUILT_IN_RANGES: Record<
   travel: { mid: 120, min: 80, max: 200 },
   health: { mid: 35, min: 20, max: 60 },
   other: { mid: 40, min: 25, max: 55 },
+  rent: { mid: 1500, min: 800, max: 3500 },
+  utilities: { mid: 180, min: 80, max: 400 },
+  subscriptions: { mid: 60, min: 10, max: 200 },
 };
 
 const CUSTOM_DEFAULT = { mid: 50, min: 30, max: 80 };
