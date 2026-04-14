@@ -1,6 +1,53 @@
+import { createClient } from "@libsql/client";
 import { PrismaLibSQL } from "@prisma/adapter-libsql";
 import { PrismaClient } from "@prisma/client";
-import { ensureTursoSchema } from "./ensureTursoSchema";
+
+function shouldIgnoreAlterError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return (
+    msg.includes("duplicate column name") ||
+    msg.includes("duplicate column") ||
+    msg.includes("already exists")
+  );
+}
+
+/** Best-effort idempotent DDL so older Turso DBs match current Prisma schema (inlined so Docker/tsc never misses a sibling file). */
+async function ensureTursoSchema(): Promise<void> {
+  const url = process.env.TURSO_DATABASE_URL?.trim();
+  const authToken = process.env.TURSO_AUTH_TOKEN?.trim();
+  if (!url || !authToken) return;
+
+  const client = createClient({ url, authToken });
+
+  async function safeExecute(sql: string): Promise<void> {
+    try {
+      await client.execute(sql);
+    } catch (e: unknown) {
+      if (shouldIgnoreAlterError(e)) return;
+      throw e;
+    }
+  }
+
+  await safeExecute(`ALTER TABLE "Event" ADD COLUMN "recurrence" TEXT;`);
+  await safeExecute(`ALTER TABLE "Event" ADD COLUMN "recurrenceEnd" DATETIME;`);
+  await safeExecute(`ALTER TABLE "Event" ADD COLUMN "expenseKind" TEXT;`);
+
+  await safeExecute(
+    `ALTER TABLE "TrackedExpense" ADD COLUMN "occurrenceKey" TEXT NOT NULL DEFAULT '';`,
+  );
+
+  try {
+    await client.execute(
+      `UPDATE "TrackedExpense" SET "occurrenceKey" = '' WHERE "occurrenceKey" IS NULL;`,
+    );
+  } catch {
+    /* ignore */
+  }
+
+  await safeExecute(
+    `CREATE UNIQUE INDEX IF NOT EXISTS "TrackedExpense_userId_eventId_occurrenceKey_key" ON "TrackedExpense" ("userId", "eventId", "occurrenceKey");`,
+  );
+}
 
 await ensureTursoSchema();
 
